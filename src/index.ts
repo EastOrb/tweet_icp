@@ -43,7 +43,7 @@ type TweetPayload = Record<{
   username: string;
 }>;
 
-const tweetStorage = new StableBTreeMap<string, Tweet>(0, 44, 1024);
+const tweetStorage: StableBTreeMap<string, Tweet> = new StableBTreeMap<string, Tweet>(0, 44, 1024);
 
 // Function to fetch a tweet
 // returns an error message if tweet with id isn't found
@@ -54,6 +54,7 @@ export function getTweet(id: string): Result<Tweet, string> {
     None: () => Result.Err<Tweet, string>(`Tweet with id=${id} not found`),
   });
 }
+
 // Function to fetch all tweets
 $query;
 export function getAllTweets(): Result<Vec<Tweet>, string> {
@@ -63,6 +64,10 @@ export function getAllTweets(): Result<Vec<Tweet>, string> {
 // Function that allows users to post tweets
 $update;
 export function postTweet(payload: TweetPayload): Result<Tweet, string> {
+  if (!payload.content || !payload.username) {
+    return Result.Err<Tweet, string>("Tweet content and username are required.");
+  }
+  
   const tweet: Tweet = {
     id: uuidv4(),
     owner: ic.caller(),
@@ -83,9 +88,8 @@ $update;
 export function editTweet(id: string, content: string): Result<Tweet, string> {
   return match(tweetStorage.get(id), {
     Some: (tweet) => {
-      // if caller isn't the tweet's owner, return an error
       if (tweet.owner.toString() !== ic.caller().toString()) {
-        return Result.Err<Tweet, string>("You are not the tweet's owner");
+        return Result.Err<Tweet, string>(`You are not the owner of the tweet with id=${id}`);
       }
       const updatedTweet: Tweet = {
         ...tweet,
@@ -98,27 +102,32 @@ export function editTweet(id: string, content: string): Result<Tweet, string> {
     None: () => Result.Err<Tweet, string>(`Tweet with id=${id} not found`),
   });
 }
+
 // Function that allows the author/owner of a tweet to delete the tweet
 $update;
 export function deleteTweet(id: string): Result<Tweet, string> {
   return match(tweetStorage.get(id), {
-    Some: (delete_tweet) => {
-      // if caller isn't the tweet's owner, return an error
-      if (delete_tweet.owner.toString() !== ic.caller().toString()) {
-        return Result.Err<Tweet, string>("You are not the tweet's owner");
+    Some: (tweet) => {
+      if (tweet.owner.toString() !== ic.caller().toString()) {
+        return Result.Err<Tweet, string>(`You are not the owner of the tweet with id=${id}`);
       }
       tweetStorage.remove(id);
-      return Result.Ok<Tweet, string>(delete_tweet);
+      return Result.Ok<Tweet, string>(tweet);
     },
     None: () => Result.Err<Tweet, string>(`Cannot Delete this Tweet id=${id}.`),
   });
 }
+
 // Function that allows users to comment on a tweet
 $update;
 export function addComment(
   tweetId: string,
   payload: CommentPayload
 ): Result<Tweet, string> {
+  if (!payload.content || !payload.username) {
+    return Result.Err<Tweet, string>("Comment content and username are required.");
+  }
+  
   return match(tweetStorage.get(tweetId), {
     Some: (tweet) => {
       const comment: Comment = {
@@ -145,13 +154,9 @@ export function addLike(tweetId: string): Result<Tweet, string> {
   return match(tweetStorage.get(tweetId), {
     Some: (tweet) => {
       let liked: Vec<string> = tweet.liked;
-      // checks if caller has already liked the tweet
       if (liked.includes(ic.caller().toString())) {
-        return Result.Err<Tweet, string>(
-          `Already liked tweet with id ${tweetId}`
-        );
+        return Result.Err<Tweet, string>(`Already liked tweet with id ${tweetId}`);
       }
-      // add caller to the liked array and increment the likes property by 1
       const updatedTweet: Tweet = {
         ...tweet,
         likes: tweet.likes + 1,
@@ -170,24 +175,12 @@ export function removeLike(tweetId: string): Result<Tweet, string> {
   return match(tweetStorage.get(tweetId), {
     Some: (tweet) => {
       if (tweet.likes > 0) {
-        let liked: Vec<string> = tweet.liked;
-        const likedIndex = liked.findIndex((user) => ic.caller().toString() === user.toString());
-        // checks if caller hasn't liked the tweet
-        if (likedIndex === -1) {
-          return Result.Err<Tweet, string>(
-            `You haven't liked the tweet with id ${tweetId}`
-          );
-        }
-        // removes caller from the liked array
-        liked.splice(likedIndex, 1)
-        // update the liked array and decrement the likes property by 1
-        const updatedTweet: Tweet = { ...tweet, likes: tweet.likes - 1 , liked: liked};
+        const updatedLiked = tweet.liked.filter((user) => user !== ic.caller().toString());
+        const updatedTweet: Tweet = { ...tweet, likes: tweet.likes - 1, liked: updatedLiked };
         tweetStorage.insert(tweet.id, updatedTweet);
         return Result.Ok<Tweet, string>(updatedTweet);
       } else {
-        return Result.Err<Tweet, string>(
-          `Tweet with id=${tweetId} has no likes to remove.`
-        );
+        return Result.Err<Tweet, string>(`Tweet with id=${tweetId} has no likes to remove.`);
       }
     },
     None: () => Result.Err<Tweet, string>(`Tweet with id=${tweetId} not found`),
@@ -204,19 +197,16 @@ export function deleteComment(
     Some: (tweet) => {
       const updatedComments: Vec<Comment> = tweet.comments;
       const commentIndex = updatedComments.findIndex((comment) => comment.id === commentId);
-      // if comment doesn't exist, return an error
       if (commentIndex === -1) {
         return Result.Err<Tweet, string>(
           `Comment with id=${commentId} not found in the tweet.`
         );
       }
-      // if caller is not the owner of the comment, return an error
-      if(updatedComments[commentIndex].owner.toString() !== ic.caller().toString()){
+      if (updatedComments[commentIndex].owner.toString() !== ic.caller().toString()){
         return Result.Err<Tweet, string>(`You are not the owner of the comment with id ${commentId}`)
       }
-      // remove comment from the updatedComments array
       updatedComments.splice(commentIndex, 1);
-      // update the comments array property with the updatedComments array
+      const updatedTweet: Tweet = { ...tweet,
       const updatedTweet: Tweet = { ...tweet, comments: updatedComments };
       tweetStorage.insert(tweet.id, updatedTweet);
       return Result.Ok<Tweet, string>(updatedTweet);
